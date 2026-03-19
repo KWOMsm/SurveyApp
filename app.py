@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import io
-from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.chart import BarChart, LineChart, Reference
 from openpyxl.worksheet.pagebreak import Break
@@ -21,6 +21,7 @@ def process_data(file_guri, file_nyj):
                 
             if '근로자' in str(course_type):
                 data = {
+                    '응답일시': row.get('응답일시', ''), # ✨ 응답일시 추가
                     '학원명': academy_name, '과정구분': '근로자 과정', '이름': row.get('이름을 입력해주세요.(*)', ''),
                     '1.전반적만족도': row.get('[전반적 만족도] 1. 이 훈련과정에 대해 전반적으로 만족한다.(*)', ''),
                     '2.훈련내용(실무/취업)': row.get('[훈련내용] 2. 훈련과정은 기업현장의 실무와 연계되었다.(*)', ''),
@@ -44,6 +45,7 @@ def process_data(file_guri, file_nyj):
                 }
             elif '실업자' in str(course_type): 
                 data = {
+                    '응답일시': row.get('응답일시', ''), # ✨ 응답일시 추가
                     '학원명': academy_name, '과정구분': '실업자 과정', '이름': row.get('이름을 입력해주세요.(*).1', ''),
                     '1.전반적만족도': row.get('[전반적 만족도] 1. 이 훈련과정에 대해 전반적으로 만족한다.(*).1', ''),
                     '2.훈련내용(실무/취업)': row.get('[훈련내용] 2. 훈련과정은 취업(창업)에 필요한 실무 지식·기술로 구성되었다.(*)', ''),
@@ -87,22 +89,68 @@ def generate_excel(final_df):
     buffer = io.BytesIO()
     
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-        final_df.to_excel(writer, index=False, sheet_name='전체항목_원본')
+        # ---------------------------------------------------------
+        # [1. 원본 데이터 시트 생성 및 인쇄 최적화]
+        # ---------------------------------------------------------
+        final_df.to_excel(writer, index=False, sheet_name='전체항목_원본(인쇄용)')
         wb = writer.book
-        ws_raw = writer.sheets['전체항목_원본']
+        ws_raw = writer.sheets['전체항목_원본(인쇄용)']
         
+        # 1-1. 헤더 디자인 적용
         header_fill = PatternFill(start_color="DCE6F1", end_color="DCE6F1", fill_type="solid")
         for row in ws_raw.iter_rows(min_row=1, max_row=1):
             for cell in row:
                 cell.font = Font(bold=True)
                 cell.fill = header_fill
-                cell.alignment = Alignment(horizontal='center', vertical='center')
+                cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
         
+        # 1-2. 모든 칸(셀)에 대해 글자 줄바꿈 및 가운데 정렬 설정
+        for row in ws_raw.iter_rows(min_row=2):
+            for cell in row:
+                cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+        
+        # 1-3. 피드백 열(개선요청, 수강후기)은 왼쪽 정렬
+        col_improve = ws_raw.max_column - 1
+        col_review = ws_raw.max_column
+        for row in ws_raw.iter_rows(min_row=2, min_col=col_improve, max_col=col_review):
+            for cell in row:
+                cell.alignment = Alignment(horizontal='left', vertical='center', wrap_text=True)
+
+        # 1-4. 표가 시원하게 보이도록 상하 높이 / 좌우 너비 강제 확장 ✨
+        ws_raw.row_dimensions[1].height = 40 # 첫 번째 제목 행 높이
+        
+        for i in range(2, ws_raw.max_row + 1):
+            ws_raw.row_dimensions[i].height = 45 # 데이터 행들을 위아래로 시원하게 늘림 (기본 15 -> 45)
+
+        ws_raw.column_dimensions['A'].width = 5   # 순번
+        ws_raw.column_dimensions['B'].width = 13  # 응답일시
+        ws_raw.column_dimensions['C'].width = 11  # 학원명
+        ws_raw.column_dimensions['D'].width = 10  # 과정구분
+        ws_raw.column_dimensions['E'].width = 8   # 이름
+        
+        # 점수 열들(F열부터)은 적당히 여유 있게
+        for col_idx in range(6, ws_raw.max_column - 1):
+            ws_raw.column_dimensions[get_column_letter(col_idx)].width = 11 
+            
+        # 긴 텍스트 열은 넓게
+        ws_raw.column_dimensions[get_column_letter(col_improve)].width = 25 # 개선요청
+        ws_raw.column_dimensions[get_column_letter(col_review)].width = 25  # 수강후기
+
+        # 1-5. 원본 시트 인쇄 설정 (가로 방향, 폭 1페이지 꽉 차게, 여백 최소화) ✨
         ws_raw.page_setup.orientation = ws_raw.ORIENTATION_LANDSCAPE
         ws_raw.sheet_properties.pageSetUpPr.fitToPage = True
-        ws_raw.page_setup.fitToHeight = False
-        ws_raw.page_setup.fitToWidth = 1
+        ws_raw.page_setup.fitToHeight = False # 세로 페이지 수는 제한 없이 늘어나도록
+        ws_raw.page_setup.fitToWidth = 1      # 가로는 무조건 1장에 우겨넣음
         
+        # 용지 여백을 좁게 설정하여 공간을 최대한 활용
+        ws_raw.page_margins.left = 0.2
+        ws_raw.page_margins.right = 0.2
+        ws_raw.page_margins.top = 0.5
+        ws_raw.page_margins.bottom = 0.5
+
+        # ---------------------------------------------------------
+        # [2. 요약 보고서 시트 생성]
+        # ---------------------------------------------------------
         ws_sum = wb.create_sheet(title='요약보고서(인쇄용)')
         
         ws_sum.append(["📊 만족도 조사 핵심 요약 보고서"])
@@ -155,7 +203,6 @@ def generate_excel(final_df):
         bar_chart.y_axis.title = "점수 (7점 만점)"
         bar_chart.y_axis.scaling.min = 0
         bar_chart.y_axis.scaling.max = 7
-        
         bar_chart.width = 17 
         bar_chart.height = 11
         
@@ -214,7 +261,7 @@ def generate_excel(final_df):
 # --- Streamlit 웹 화면 구성 ---
 st.set_page_config(page_title="간호학원 만족도 조사", page_icon="📊", layout="wide")
 st.title("📊 간호학원 만족도 조사 통합/인쇄 자동화 시스템")
-st.write("원본 파일 업로드 시 **[전체 항목 정리]** 및 **[세로형(A4) 보고서]**가 함께 생성됩니다.")
+st.write("원본 파일 업로드 시 **[원본 인쇄용 꽉 찬 시트]** 및 **[세로형 요약 보고서]**가 함께 생성됩니다.")
 
 st.divider()
 col1, col2 = st.columns(2)
@@ -222,9 +269,9 @@ with col1: file_guri = st.file_uploader("📂 구리 학원 결과 업로드", t
 with col2: file_nyj = st.file_uploader("📂 남양주 학원 결과 업로드", type=['csv', 'xlsx'])
 st.divider()
 
-if st.button("🚀 세로형 최종 보고서 생성 시작", use_container_width=True):
+if st.button("🚀 최종 분석 및 엑셀 다운로드", use_container_width=True):
     if file_guri or file_nyj:
-        with st.spinner('피드백의 길이를 분석하여 엑셀 칸 높이를 알맞게 조절하고 있습니다...'):
+        with st.spinner('원본 데이터의 빈틈을 메우고, 인쇄 시 시원하게 보이도록 여백과 칸을 최적화하고 있습니다...'):
             result_df = process_data(file_guri, file_nyj)
             
             if not result_df.empty:
@@ -234,9 +281,9 @@ if st.button("🚀 세로형 최종 보고서 생성 시작", use_container_widt
                 excel_buffer = generate_excel(result_df)
                 
                 st.download_button(
-                    label="📥 [최적화 적용] 최종 보고서 다운로드",
+                    label="📥 [전체시트 인쇄 최적화] 최종 엑셀 다운로드",
                     data=excel_buffer.getvalue(),
-                    file_name="완료_만족도조사_최종보고서(완성본).xlsx",
+                    file_name="완료_만족도조사_최종보고서(최종판).xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
             else:
